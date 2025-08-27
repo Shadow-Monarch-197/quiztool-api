@@ -7,6 +7,8 @@ using quizTool.Services;
 using System.IdentityModel.Tokens.Jwt;                    
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
