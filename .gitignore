@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userprefs
+*.db
+*.sqlite
+# Keep only the template appsettings in git:
+appsettings.*.json
+!appsettings.json
+wwwroot/uploads/*
+!wwwroot/uploads/.gitkeep
