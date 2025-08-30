@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using quizTool.Models;
@@ -11,9 +12,11 @@ using quizTool.Models;
 namespace quizTool.Migrations
 {
     [DbContext(typeof(QuizTool_Dbcontext))]
-    partial class QuizTool_DbcontextModelSnapshot : ModelSnapshot
+    [Migration("20250830083243_AddedLockingFunction")]
+    partial class AddedLockingFunction
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

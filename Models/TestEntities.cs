@@ -19,6 +19,9 @@ namespace quizTool.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+        // NEW: when true, test cannot be modified (add/delete questions) 30 aug
+        public bool IsLocked { get; set; } = false; // NEW
+
         public ICollection<Question> Questions { get; set; } = new List<Question>();
     }
 

@@ -29,7 +29,7 @@
 
         public string Type { get; set; } = "objective";
 
-    
+
         public string? ImageUrl { get; set; }
 
         public List<OptionDto> Options { get; set; }
@@ -39,7 +39,7 @@
     {
         public int Id { get; set; }
         public string Text { get; set; }
-    }
+    }
 
     public class SubmitAttemptDto
     {
@@ -62,7 +62,7 @@
         public int Score { get; set; }
         public int Total { get; set; }
     }
-    
+
     public class AttemptListItemDto
     {
         public int Id { get; set; }
@@ -79,6 +79,9 @@
     {
         public int Id { get; set; }
         public string Title { get; set; } = "";
+
+        //30 Aug
+        public bool IsLocked { get; set; } = false; // NEW
         public List<AdminQuestionDto> Questions { get; set; } = new();
     }
 
@@ -116,7 +119,7 @@
         public int QuestionId { get; set; }
         public string QuestionText { get; set; } = "";
 
-        public string Type { get; set; } = "objective";  
+        public string Type { get; set; } = "objective";
 
         public string? ImageUrl { get; set; }
 
@@ -124,13 +127,29 @@
         public string? SelectedOptionText { get; set; }
         public int? CorrectOptionId { get; set; }
         public string? CorrectOptionText { get; set; }
-        public bool? IsCorrect { get; set; }     
+        public bool? IsCorrect { get; set; }
 
-        public string? SubjectiveText { get; set; }       
-        public string? ModelAnswer { get; set; }        
+        public string? SubjectiveText { get; set; }
+        public string? ModelAnswer { get; set; }
     }
     public class UpdateAttemptScoreDto
     {
         public int Score { get; set; }
+    }
+
+    //30 Aug
+    // NEW: preview payload returned from parse-upload
+    public class ParsedUploadDto // NEW
+    {
+        public string Title { get; set; } = "";
+        public List<AdminQuestionDto> Questions { get; set; } = new();
+    }
+    //30 Aug
+
+    // NEW: body for save-parsed
+    public class SaveParsedTestBody // NEW
+    {
+        public string Title { get; set; } = "";
+        public List<AdminQuestionDto> Questions { get; set; } = new();
     }
 }

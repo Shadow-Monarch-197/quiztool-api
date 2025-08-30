@@ -57,8 +57,270 @@ namespace quizTool.Controllers
             var path = Path.Combine(dir, file);
             using var fs = System.IO.File.Create(path);
             src.CopyTo(fs);
-            return $"/uploads/{file}"; 
+            return $"/uploads/{file}";
         }
+        // 30 Aug
+        // NEW: Parse without saving, return editable questions
+        [Authorize(Roles = "admin")]
+        [HttpPost("parse-upload")] // NEW
+        [Consumes("multipart/form-data")] // NEW
+        public async Task<ActionResult<ParsedUploadDto>> ParseUpload([FromForm] UploadTestForm form) // NEW
+        {
+            var file = form.File;
+            if (file == null || file.Length == 0) return BadRequest("No file submitted.");
+
+            var suggestedTitle = string.IsNullOrWhiteSpace(form.Title)
+                ? (Path.GetFileNameWithoutExtension(file.FileName) ?? "Uploaded Test")
+                : form.Title.Trim();
+
+            var preview = new ParsedUploadDto { Title = suggestedTitle, Questions = new List<AdminQuestionDto>() };
+
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+
+            if (ext == ".xlsx")
+            {
+                using var stream = file.OpenReadStream();
+                using var workbook = new XLWorkbook(stream);
+                var ws = workbook.Worksheet(1);
+
+                static string Norm(string s) =>
+                    (s ?? "").Replace(" ", "").Replace("_", "").Replace("-", "")
+                              .Trim().ToLowerInvariant();
+
+                var header = ws.FirstRowUsed();
+                var colMap = header.Cells().ToDictionary(
+                    c => Norm(c.GetString()),
+                    c => c.Address.ColumnNumber
+                );
+
+                int GetCol(params string[] names)
+                {
+                    foreach (var n in names)
+                    {
+                        if (colMap.TryGetValue(Norm(n), out var idx)) return idx;
+                    }
+                    return -1;
+                }
+
+                int colType = GetCol("Type");
+                int colQ = GetCol("Question");
+                int colO1 = GetCol("Option1", "Option 1");
+                int colO2 = GetCol("Option2", "Option 2");
+                int colO3 = GetCol("Option3", "Option 3");
+                int colO4 = GetCol("Option4", "Option 4");
+                int colCorr = GetCol("Correct", "CorrectOption", "Correct Option");
+                int colModel = GetCol("ModelAnswer", "Model Answer", "Answer", "ReferenceAnswer", "Reference Answer");
+
+                if (colType < 0 || colQ < 0)
+                    return BadRequest("Missing required columns: Type, Question");
+
+                var pics = ws.Pictures.ToList();
+                int rowStart = header.RowBelow().RowNumber();
+                int last = ws.LastRowUsed().RowNumber();
+
+                for (int r = rowStart; r <= last; r++)
+                {
+                    string qText = ws.Cell(r, colQ).GetString().Trim();
+                    if (string.IsNullOrWhiteSpace(qText)) continue;
+
+                    var typeStr = ws.Cell(r, colType).GetString().Trim().ToLowerInvariant();
+                    var kind = typeStr == "subjective" ? QuestionType.Subjective : QuestionType.Objective;
+
+                    string? imageUrl = null;
+                    var pic = pics.FirstOrDefault(p =>
+                        p.TopLeftCell.Address.RowNumber == r &&
+                        p.TopLeftCell.Address.ColumnNumber == colQ);
+
+                    if (pic != null)
+                    {
+                        var imgExt = pic.Format switch
+                        {
+                            XLPictureFormat.Png => ".png",
+                            XLPictureFormat.Jpeg => ".jpg",
+                            XLPictureFormat.Gif => ".gif",
+                            XLPictureFormat.Bmp => ".bmp",
+                            XLPictureFormat.Tiff => ".tiff",
+                            _ => ".png"
+                        };
+
+                        using var ms = new MemoryStream();
+                        using (var src = pic.ImageStream)
+                        {
+                            if (src.CanSeek) src.Position = 0;
+                            src.CopyTo(ms);
+                        }
+                        ms.Position = 0;
+
+                        imageUrl = SaveImage(ms, imgExt);
+                    }
+
+                    var aq = new AdminQuestionDto
+                    {
+                        Id = 0,
+                        Text = qText,
+                        Type = kind,
+                        ImageUrl = imageUrl,
+                        Options = new List<AdminOptionDto>()
+                    };
+
+                    if (kind == QuestionType.Objective)
+                    {
+                        var opts = new List<string>();
+                        if (colO1 > 0) { var v = ws.Cell(r, colO1).GetString(); if (!string.IsNullOrWhiteSpace(v)) opts.Add(v.Trim()); }
+                        if (colO2 > 0) { var v = ws.Cell(r, colO2).GetString(); if (!string.IsNullOrWhiteSpace(v)) opts.Add(v.Trim()); }
+                        if (colO3 > 0) { var v = ws.Cell(r, colO3).GetString(); if (!string.IsNullOrWhiteSpace(v)) opts.Add(v.Trim()); }
+                        if (colO4 > 0) { var v = ws.Cell(r, colO4).GetString(); if (!string.IsNullOrWhiteSpace(v)) opts.Add(v.Trim()); }
+
+                        if (opts.Count == 0) continue;
+
+                        int correctIndex = 0;
+                        if (colCorr > 0)
+                        {
+                            var corrStr = ws.Cell(r, colCorr).GetString();
+                            if (int.TryParse(corrStr, out var num) && num >= 1 && num <= opts.Count)
+                                correctIndex = num - 1;
+                        }
+
+                        for (int i = 0; i < opts.Count; i++)
+                            aq.Options.Add(new AdminOptionDto { Id = 0, Text = opts[i], IsCorrect = i == correctIndex });
+                    }
+                    else
+                    {
+                        if (colModel > 0)
+                        {
+                            var modelAns = ws.Cell(r, colModel).GetString()?.Trim();
+                            if (!string.IsNullOrWhiteSpace(modelAns)) aq.ModelAnswer = modelAns;
+                        }
+                    }
+
+                    preview.Questions.Add(aq);
+                }
+            }
+            else
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+                using var stream = file.OpenReadStream();
+                using var reader = ExcelReaderFactory.CreateReader(stream);
+                var dataSet = reader.AsDataSet(new ExcelDataSetConfiguration
+                {
+                    ConfigureDataTable = _ => new ExcelDataTableConfiguration { UseHeaderRow = true }
+                });
+
+                if (dataSet.Tables.Count == 0) return BadRequest("Empty Excel.");
+                var table = dataSet.Tables[0];
+
+                foreach (DataRow row in table.Rows)
+                {
+                    string? Col(params string[] names)
+                    {
+                        foreach (DataColumn dc in table.Columns)
+                        {
+                            var name = dc.ColumnName?.Trim();
+                            if (names.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
+                                return row[dc]?.ToString();
+                        }
+                        return null;
+                    }
+
+                    var typeStr = (Col("Type") ?? "objective").Trim().ToLowerInvariant();
+                    var kind = typeStr == "subjective" ? QuestionType.Subjective : QuestionType.Objective;
+
+                    string q = (Col("Question") ?? (row.ItemArray.Length > 1 ? row[1]?.ToString() : "") ?? "").Trim();
+                    if (string.IsNullOrWhiteSpace(q)) continue;
+
+                    var aq = new AdminQuestionDto { Id = 0, Text = q, Type = kind, Options = new List<AdminOptionDto>() };
+
+                    if (kind == QuestionType.Objective)
+                    {
+                        string? o1 = Col("Option 1", "Option1");
+                        string? o2 = Col("Option 2", "Option2");
+                        string? o3 = Col("Option 3", "Option3");
+                        string? o4 = Col("Option 4", "Option4");
+
+                        var opts = new[] { o1, o2, o3, o4 }
+                                   .Where(s => !string.IsNullOrWhiteSpace(s))
+                                   .Select(s => s!.Trim()).ToList();
+                        if (opts.Count == 0) continue;
+
+                        int correctIndex = 0;
+                        var corr = (Col("Correct", "Correct Option", "CorrectOption") ?? "").Trim();
+                        if (int.TryParse(corr, out var num) && num >= 1 && num <= opts.Count) correctIndex = num - 1;
+
+                        for (int i = 0; i < opts.Count; i++)
+                            aq.Options.Add(new AdminOptionDto { Id = 0, Text = opts[i], IsCorrect = i == correctIndex });
+                    }
+                    else
+                    {
+                        var model = (Col("ModelAnswer", "Model Answer", "Answer", "ReferenceAnswer", "Reference Answer") ?? "").Trim();
+                        aq.ModelAnswer = string.IsNullOrWhiteSpace(model) ? null : model;
+                    }
+
+                    preview.Questions.Add(aq);
+                }
+            }
+
+            if (preview.Questions.Count == 0)
+                return BadRequest("No questions parsed.");
+
+            return Ok(preview);
+        }
+        //
+        //30 Aug
+
+        // NEW: Save parsed questions as a locked test
+        [Authorize(Roles = "admin")]
+        [HttpPost("save-parsed")] // NEW
+        public async Task<ActionResult<UploadTestResultDto>> SaveParsed([FromBody] SaveParsedTestBody body) // NEW
+        {
+            if (body == null) return BadRequest("Invalid payload.");
+            var title = (body.Title ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(title)) return BadRequest("Title is required.");
+            if (body.Questions == null || body.Questions.Count == 0) return BadRequest("Provide at least one question.");
+
+            var exists = await _db.Tests.AnyAsync(x => x.Title.ToLower() == title.ToLower());
+            if (exists) return Conflict(new { message = $"A test named '{title}' already exists." });
+
+            var test = new Test { Title = title, IsLocked = true }; // NEW: lock on create
+
+            foreach (var qd in body.Questions)
+            {
+                var q = new Question
+                {
+                    Text = (qd.Text ?? "").Trim(),
+                    Type = qd.Type,
+                    ImageUrl = string.IsNullOrWhiteSpace(qd.ImageUrl) ? null : qd.ImageUrl,
+                    ModelAnswer = qd.Type == QuestionType.Subjective ? (qd.ModelAnswer ?? "").Trim() : null
+                };
+
+                if (qd.Type == QuestionType.Objective)
+                {
+                    var options = (qd.Options ?? new List<AdminOptionDto>())
+                        .Where(o => !string.IsNullOrWhiteSpace(o.Text))
+                        .ToList();
+
+                    if (options.Count == 0) return BadRequest("Objective question requires options.");
+
+                    // Ensure exactly one correct (fallback to first)
+                    if (!options.Any(o => o.IsCorrect)) options[0].IsCorrect = true;
+                    bool firstCorrect = true;
+                    foreach (var o in options)
+                    {
+                        var opt = new Option { Text = (o.Text ?? "").Trim(), IsCorrect = o.IsCorrect && firstCorrect };
+                        if (o.IsCorrect) firstCorrect = false;
+                        q.Options.Add(opt);
+                    }
+                }
+
+                test.Questions.Add(q);
+            }
+
+            _db.Tests.Add(test);
+            await _db.SaveChangesAsync();
+
+            return Ok(new UploadTestResultDto { TestId = test.Id, Title = test.Title, Questions = test.Questions.Count });
+        }
+        //
 
         [Authorize(Roles = "admin")]
         [HttpPost("upload")]
@@ -533,6 +795,7 @@ namespace quizTool.Controllers
             {
                 Id = test.Id,
                 Title = test.Title,
+                IsLocked = test.IsLocked,
                 Questions = test.Questions
                     .OrderBy(q => q.Id)
                     .Select(q => new AdminQuestionDto
@@ -560,6 +823,12 @@ namespace quizTool.Controllers
         {
             var q = await _db.Questions.FirstOrDefaultAsync(x => x.Id == questionId);
             if (q == null) return NotFound(new { message = "Question not found." });
+
+
+            //30 Aug
+            // NEW: block delete if locked
+            var test = await _db.Tests.FirstOrDefaultAsync(t => t.Id == q.TestId); // NEW
+            if (test?.IsLocked == true) return Conflict(new { message = "This test is locked and cannot be modified." }); // NEW
 
             _db.Questions.Remove(q);
             await _db.SaveChangesAsync();
