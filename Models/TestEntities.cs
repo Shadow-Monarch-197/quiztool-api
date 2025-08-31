@@ -22,6 +22,9 @@ namespace quizTool.Models
         // NEW: when true, test cannot be modified (add/delete questions) 30 aug
         public bool IsLocked { get; set; } = false; // NEW
 
+        // NEW: optional time limit in minutes
+        public int? TimeLimitMinutes { get; set; } // NEW
+
         public ICollection<Question> Questions { get; set; } = new List<Question>();
     }
 

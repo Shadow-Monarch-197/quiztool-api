@@ -10,10 +10,12 @@ using quizTool.Models;
 using System.Data;
 using System.Text;
 
+// CHANGED: add TimeLimitMinutes on form
 public class UploadTestForm
 {
     public IFormFile File { get; set; } = default!;
     public string? Title { get; set; }
+    public int? TimeLimitMinutes { get; set; } // NEW
 }
 
 public class AddQuestionForm
@@ -74,6 +76,7 @@ namespace quizTool.Controllers
                 : form.Title.Trim();
 
             var preview = new ParsedUploadDto { Title = suggestedTitle, Questions = new List<AdminQuestionDto>() };
+            preview.TimeLimitMinutes = form.TimeLimitMinutes; // NEW
 
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
 
@@ -283,6 +286,10 @@ namespace quizTool.Controllers
 
             var test = new Test { Title = title, IsLocked = true }; // NEW: lock on create
 
+            // NEW: apply time limit
+            if (body.TimeLimitMinutes.HasValue && body.TimeLimitMinutes.Value > 0)
+                test.TimeLimitMinutes = body.TimeLimitMinutes.Value; // NEW
+
             foreach (var qd in body.Questions)
             {
                 var q = new Question
@@ -341,6 +348,10 @@ namespace quizTool.Controllers
             if (exists) return Conflict(new { message = $"A test named '{finalTitle}' already exists." });
 
             var test = new Test { Title = finalTitle };
+
+            if (form.TimeLimitMinutes.HasValue && form.TimeLimitMinutes.Value > 0)
+                test.TimeLimitMinutes = form.TimeLimitMinutes.Value; // NEW
+
 
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
 
@@ -545,7 +556,8 @@ namespace quizTool.Controllers
                     Id = t.Id,
                     Title = t.Title,
                     CreatedAt = t.CreatedAt,
-                    QuestionCount = t.Questions.Count
+                    QuestionCount = t.Questions.Count,
+                    TimeLimitMinutes = t.TimeLimitMinutes // NEW
                 })
                 .OrderByDescending(t => t.CreatedAt)
                 .ToListAsync();
@@ -597,6 +609,7 @@ namespace quizTool.Controllers
             {
                 Id = test.Id,
                 Title = test.Title,
+                TimeLimitMinutes = test.TimeLimitMinutes, // NEW
                 Questions = test.Questions.Select(q => new QuestionDto
                 {
                     Id = q.Id,
@@ -633,6 +646,11 @@ namespace quizTool.Controllers
             if (exists) return Conflict(new { message = $"A test named '{title}' already exists." });
 
             var test = new Test { Title = title };
+
+            // NEW: accept time limit from body
+            if (t.TimeLimitMinutes.HasValue && t.TimeLimitMinutes.Value > 0)
+                test.TimeLimitMinutes = t.TimeLimitMinutes.Value; // NEW
+
             _db.Tests.Add(test);
             await _db.SaveChangesAsync();
 
@@ -641,7 +659,8 @@ namespace quizTool.Controllers
                 Id = test.Id,
                 Title = test.Title,
                 CreatedAt = test.CreatedAt,
-                QuestionCount = 0
+                QuestionCount = 0,
+                TimeLimitMinutes = test.TimeLimitMinutes // NEW
             });
         }
 
@@ -796,6 +815,7 @@ namespace quizTool.Controllers
                 Id = test.Id,
                 Title = test.Title,
                 IsLocked = test.IsLocked,
+                TimeLimitMinutes = test.TimeLimitMinutes, // NEW
                 Questions = test.Questions
                     .OrderBy(q => q.Id)
                     .Select(q => new AdminQuestionDto

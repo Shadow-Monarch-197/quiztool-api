@@ -13,12 +13,18 @@
         public string Title { get; set; }
         public int QuestionCount { get; set; }
         public DateTime CreatedAt { get; set; }
+
+        // NEW
+        public int? TimeLimitMinutes { get; set; } // NEW
     }
 
     public class TestDetailDto
     {
         public int Id { get; set; }
         public string Title { get; set; }
+
+        // NEW: expose to take-test page
+        public int? TimeLimitMinutes { get; set; } // NEW
         public List<QuestionDto> Questions { get; set; }
     }
 
@@ -82,6 +88,9 @@
 
         //30 Aug
         public bool IsLocked { get; set; } = false; // NEW
+
+        // NEW
+        public int? TimeLimitMinutes { get; set; } // NEW
         public List<AdminQuestionDto> Questions { get; set; } = new();
     }
 
@@ -142,6 +151,8 @@
     public class ParsedUploadDto // NEW
     {
         public string Title { get; set; } = "";
+
+        public int? TimeLimitMinutes { get; set; } // NEW
         public List<AdminQuestionDto> Questions { get; set; } = new();
     }
     //30 Aug
@@ -150,6 +161,8 @@
     public class SaveParsedTestBody // NEW
     {
         public string Title { get; set; } = "";
+
+        public int? TimeLimitMinutes { get; set; } // NEW
         public List<AdminQuestionDto> Questions { get; set; } = new();
     }
 }
