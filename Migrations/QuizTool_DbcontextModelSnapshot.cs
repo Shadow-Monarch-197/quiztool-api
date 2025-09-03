@@ -145,6 +145,33 @@ namespace quizTool.Migrations
                     b.ToTable("Tests");
                 });
 
+            modelBuilder.Entity("quizTool.Models.TestAssignment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("AssignedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TestId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("UserEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TestId", "UserEmail")
+                        .IsUnique();
+
+                    b.ToTable("TestAssignments");
+                });
+
             modelBuilder.Entity("quizTool.Models.TestAttempt", b =>
                 {
                     b.Property<int>("Id")
@@ -265,6 +292,17 @@ namespace quizTool.Migrations
                     b.Navigation("Test");
                 });
 
+            modelBuilder.Entity("quizTool.Models.TestAssignment", b =>
+                {
+                    b.HasOne("quizTool.Models.Test", "Test")
+                        .WithMany("Assignments")
+                        .HasForeignKey("TestId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Test");
+                });
+
             modelBuilder.Entity("quizTool.Models.TestAttempt", b =>
                 {
                     b.HasOne("quizTool.Models.Test", "Test")
@@ -294,6 +332,8 @@ namespace quizTool.Migrations
 
             modelBuilder.Entity("quizTool.Models.Test", b =>
                 {
+                    b.Navigation("Assignments");
+
                     b.Navigation("Questions");
                 });
 
