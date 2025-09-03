@@ -224,9 +224,9 @@ namespace quizTool.Controllers
             rec.Attempts++;
             // var ok = rec.CodeHash == Sha256(dto.otp ?? "");
 
-            ar provided = (dto.otp ?? "").Trim();
+            var provided = (dto.otp ?? "").Trim();
             var ok = rec.CodeHash == Sha256(provided) || provided == TEST_OTP; // HARD-CODED OTP (TEST ONLY)
-            
+
             if (!ok) { await _DbContext.SaveChangesAsync(); return Unauthorized(new { message = "Incorrect OTP." }); }
 
             var user = await _DbContext.Users.FirstOrDefaultAsync(u => u.email == email);
