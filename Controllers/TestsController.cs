@@ -46,12 +46,26 @@ namespace quizTool.Controllers
         }
 
          // NEW: helper inside TestsController class
-        private string CurrentEmail()
-        {
-            return (User?.Claims?.FirstOrDefault(c =>
-                c.Type == JwtRegisteredClaimNames.UniqueName || c.Type == "unique_name")?.Value ?? "")
-                .Trim().ToLower();
-        }
+         private string CurrentEmail()
+     {
+         // Try Identity.Name first (depends on NameClaimType mapping)
+         string? v = User?.Identity?.Name;
+
+         // Fall back to common claim types seen in tokens
+         v ??= User?.Claims?.FirstOrDefault(c =>
+                 c.Type == ClaimTypes.Email ||
+                 c.Type == JwtRegisteredClaimNames.Email ||
+                 c.Type == "email" ||
+                 c.Type == JwtRegisteredClaimNames.UniqueName ||
+                 c.Type == "unique_name" ||
+                 c.Type == ClaimTypes.Name ||
+                 c.Type == "name" ||
+                 c.Type == ClaimTypes.Upn ||
+                 c.Type == "preferred_username")
+             ?.Value;
+
+         return (v ?? string.Empty).Trim().ToLowerInvariant();
+     }
 
 
         private string EnsureUploadsDir()
@@ -556,27 +570,72 @@ namespace quizTool.Controllers
             return Ok(new UploadTestResultDto { TestId = test.Id, Title = test.Title, Questions = test.Questions.Count });
         }
 
-       [Authorize]
+    //    [Authorize]
+    //     [HttpGet]
+    //     public async Task<ActionResult<IEnumerable<TestSummaryDto>>> GetTests()
+    //     {
+    //         // CHANGED: admins see all; basic users only their assigned tests
+    //         var isAdmin = User.IsInRole("admin"); // CHANGED
+
+    //         IQueryable<Test> query = _db.Tests.AsQueryable(); // CHANGED
+
+    //         if (!isAdmin) // CHANGED
+    //         {
+    //             var email = CurrentEmail(); // CHANGED
+    //             var testIds = await _db.TestAssignments
+    //                 .Where(a => a.UserEmail == email)
+    //                 .Select(a => a.TestId)
+    //                 .ToListAsync();
+
+    //             query = query.Where(t => testIds.Contains(t.Id)); // CHANGED
+    //         }
+
+    //         var list = await query
+    //             .OrderByDescending(t => t.CreatedAt)
+    //             .Select(t => new TestSummaryDto
+    //             {
+    //                 Id = t.Id,
+    //                 Title = t.Title,
+    //                 CreatedAt = t.CreatedAt,
+    //                 QuestionCount = t.Questions.Count,
+    //                 TimeLimitMinutes = t.TimeLimitMinutes
+    //             })
+    //             .ToListAsync();
+
+    //         return Ok(list);
+    //     }
+
+    
+        [Authorize]
         [HttpGet]
         public async Task<ActionResult<IEnumerable<TestSummaryDto>>> GetTests()
         {
-            // CHANGED: admins see all; basic users only their assigned tests
-            var isAdmin = User.IsInRole("admin"); // CHANGED
+            var currentEmail = CurrentEmail();
+            if (true) { Console.WriteLine($"Current user email: {currentEmail}"); }
 
-            IQueryable<Test> query = _db.Tests.AsQueryable(); // CHANGED
-
-            if (!isAdmin) // CHANGED
+            if (User.IsInRole("admin"))
             {
-                var email = CurrentEmail(); // CHANGED
-                var testIds = await _db.TestAssignments
-                    .Where(a => a.UserEmail == email)
-                    .Select(a => a.TestId)
+                var all = await _db.Tests
+                    .AsNoTracking()
+                    .OrderByDescending(t => t.CreatedAt)
+                    .Select(t => new TestSummaryDto
+                    {
+                        Id = t.Id,
+                        Title = t.Title,
+                        CreatedAt = t.CreatedAt,
+                        QuestionCount = t.Questions.Count,
+                        TimeLimitMinutes = t.TimeLimitMinutes
+                    })
                     .ToListAsync();
-
-                query = query.Where(t => testIds.Contains(t.Id)); // CHANGED
+                return Ok(all);
             }
+            Console.WriteLine($"Current user email: {currentEmail}");
 
-            var list = await query
+            var assigned = await _db.Tests
+                .AsNoTracking()
+                .Where(t => _db.TestAssignments
+                    .Any(a => a.TestId == t.Id &&
+                              a.UserEmail.ToLower() == currentEmail)) // or EF.Functions.ILike(a.UserEmail, currentEmail)
                 .OrderByDescending(t => t.CreatedAt)
                 .Select(t => new TestSummaryDto
                 {
@@ -588,7 +647,7 @@ namespace quizTool.Controllers
                 })
                 .ToListAsync();
 
-            return Ok(list);
+            return Ok(assigned);
         }
 
         [Authorize(Roles = "admin")]
@@ -620,30 +679,23 @@ namespace quizTool.Controllers
             return Ok(list);
         }
 
-         //// 3 sep ////
- [Authorize]
+
+             [Authorize]
  [HttpGet("{id:int}")]
  public async Task<ActionResult<TestDetailDto>> GetTest(int id)
  {
      var test = await _db.Tests
-         .Include(t => t.Questions).ThenInclude(q => q.Options)
+         .Include(t => t.Questions)
+         .ThenInclude(q => q.Options)
          .FirstOrDefaultAsync(t => t.Id == id);
 
      if (test == null) return NotFound();
-
-     // NEW: only admin or assigned user can view
-     if (!User.IsInRole("admin")) // NEW
-     {
-         var email = CurrentEmail(); // NEW
-         var allowed = await _db.TestAssignments.AnyAsync(a => a.TestId == id && a.UserEmail == email); // NEW
-         if (!allowed) return Forbid(); // NEW
-     }
 
      return Ok(new TestDetailDto
      {
          Id = test.Id,
          Title = test.Title,
-         TimeLimitMinutes = test.TimeLimitMinutes,
+         TimeLimitMinutes = test.TimeLimitMinutes, // NEW
          Questions = test.Questions.Select(q => new QuestionDto
          {
              Id = q.Id,
@@ -656,6 +708,42 @@ namespace quizTool.Controllers
          }).ToList()
      });
  }
+         //// 3 sep ////
+//  [Authorize]
+//  [HttpGet("{id:int}")]
+//  public async Task<ActionResult<TestDetailDto>> GetTest(int id)
+//  {
+//      var test = await _db.Tests
+//          .Include(t => t.Questions).ThenInclude(q => q.Options)
+//          .FirstOrDefaultAsync(t => t.Id == id);
+
+//      if (test == null) return NotFound();
+
+//      // NEW: only admin or assigned user can view
+//      if (!User.IsInRole("admin")) // NEW
+//      {
+//          var email = CurrentEmail(); // NEW
+//          var allowed = await _db.TestAssignments.AnyAsync(a => a.TestId == id && a.UserEmail == email); // NEW
+//          if (!allowed) return Forbid(); // NEW
+//      }
+
+//      return Ok(new TestDetailDto
+//      {
+//          Id = test.Id,
+//          Title = test.Title,
+//          TimeLimitMinutes = test.TimeLimitMinutes,
+//          Questions = test.Questions.Select(q => new QuestionDto
+//          {
+//              Id = q.Id,
+//              Text = q.Text,
+//              Type = q.Type == QuestionType.Subjective ? "subjective" : "objective",
+//              ImageUrl = q.ImageUrl,
+//              Options = q.Type == QuestionType.Objective
+//                  ? q.Options.Select(o => new OptionDto { Id = o.Id, Text = o.Text }).ToList()
+//                  : new List<OptionDto>()
+//          }).ToList()
+//      });
+//  }
 
         [Authorize(Roles = "admin")]
         [HttpDelete("{id:int}")]
@@ -761,14 +849,14 @@ namespace quizTool.Controllers
 
      if (test == null) return NotFound("Test not found.");
 
-     // only admin or assigned user may submit
-     if (!User.IsInRole("admin"))
-     {
-         var currentEmail = CurrentEmail(); // FIX: renamed from "email"
-         var allowed = await _db.TestAssignments
-             .AnyAsync(a => a.TestId == dto.TestId && a.UserEmail == currentEmail);
-         if (!allowed) return Forbid();
-     }
+    //  // only admin or assigned user may submit
+    //  if (!User.IsInRole("admin"))
+    //  {
+    //      var currentEmail = CurrentEmail(); // FIX: renamed from "email"
+    //      var allowed = await _db.TestAssignments
+    //          .AnyAsync(a => a.TestId == dto.TestId && a.UserEmail == currentEmail);
+    //      if (!allowed) return Forbid();
+    //  }
 
      int totalQuestions = test.Questions.Count;
      int score = 0;
