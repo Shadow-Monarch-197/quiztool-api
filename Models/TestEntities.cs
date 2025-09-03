@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using quizTool.Migrations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace quizTool.Models
@@ -26,6 +27,10 @@ namespace quizTool.Models
         public int? TimeLimitMinutes { get; set; } // NEW
 
         public ICollection<Question> Questions { get; set; } = new List<Question>();
+
+        ///// 03 Sep //////////
+        // NEW: assignments nav
+        public ICollection<TestAssignment> Assignments { get; set; } = new List<TestAssignment>(); // NEW
     }
 
     public class Question
@@ -96,5 +101,21 @@ namespace quizTool.Models
 
 
         public string? SubjectiveText { get; set; }
+    }
+
+    ///// 03 Sep //////////
+    // NEW: Test ↔ User (by email) assignment table
+    public class TestAssignment // NEW
+    {
+        [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
+
+        [ForeignKey(nameof(Test))] public int TestId { get; set; } // NEW
+        public Test Test { get; set; } // NEW
+
+        [Required, MaxLength(256)]
+        public string UserEmail { get; set; } = ""; // NEW  (lowercased)
+
+        public DateTime AssignedAt { get; set; } = DateTime.UtcNow; // NEW
     }
 }

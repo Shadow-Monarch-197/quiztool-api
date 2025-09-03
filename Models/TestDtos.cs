@@ -122,6 +122,21 @@
         public DateTime AttemptedAt { get; set; }
         public List<AttemptAnswerDetailDto> Answers { get; set; } = new();
     }
+    ///// 03 sep ///////
+    // NEW: request body to assign a test to users
+    public class AssignTestDto // NEW
+    {
+        public List<string> Emails { get; set; } = new(); // NEW
+    }
+
+    // NEW: assignee list item
+    public class TestAssigneeDto // NEW
+    {
+        public string Email { get; set; } = "";  // NEW
+        public int? UserId { get; set; }         // NEW (if found)
+        public string? Name { get; set; }        // NEW (if found)
+        public DateTime AssignedAt { get; set; } // NEW
+    }
 
     public class AttemptAnswerDetailDto
     {

@@ -44,6 +44,15 @@ namespace quizTool.Controllers
             _env = env;
         }
 
+         // NEW: helper inside TestsController class
+        private string CurrentEmail()
+        {
+            return (User?.Claims?.FirstOrDefault(c =>
+                c.Type == JwtRegisteredClaimNames.UniqueName || c.Type == "unique_name")?.Value ?? "")
+                .Trim().ToLower();
+        }
+
+
         private string EnsureUploadsDir()
         {
             var web = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
@@ -546,20 +555,36 @@ namespace quizTool.Controllers
             return Ok(new UploadTestResultDto { TestId = test.Id, Title = test.Title, Questions = test.Questions.Count });
         }
 
-        [Authorize]
+       [Authorize]
         [HttpGet]
         public async Task<ActionResult<IEnumerable<TestSummaryDto>>> GetTests()
         {
-            var list = await _db.Tests
+            // CHANGED: admins see all; basic users only their assigned tests
+            var isAdmin = User.IsInRole("admin"); // CHANGED
+
+            IQueryable<Test> query = _db.Tests.AsQueryable(); // CHANGED
+
+            if (!isAdmin) // CHANGED
+            {
+                var email = CurrentEmail(); // CHANGED
+                var testIds = await _db.TestAssignments
+                    .Where(a => a.UserEmail == email)
+                    .Select(a => a.TestId)
+                    .ToListAsync();
+
+                query = query.Where(t => testIds.Contains(t.Id)); // CHANGED
+            }
+
+            var list = await query
+                .OrderByDescending(t => t.CreatedAt)
                 .Select(t => new TestSummaryDto
                 {
                     Id = t.Id,
                     Title = t.Title,
                     CreatedAt = t.CreatedAt,
                     QuestionCount = t.Questions.Count,
-                    TimeLimitMinutes = t.TimeLimitMinutes // NEW
+                    TimeLimitMinutes = t.TimeLimitMinutes
                 })
-                .OrderByDescending(t => t.CreatedAt)
                 .ToListAsync();
 
             return Ok(list);
@@ -594,34 +619,42 @@ namespace quizTool.Controllers
             return Ok(list);
         }
 
-        [Authorize]
-        [HttpGet("{id:int}")]
-        public async Task<ActionResult<TestDetailDto>> GetTest(int id)
-        {
-            var test = await _db.Tests
-                .Include(t => t.Questions)
-                .ThenInclude(q => q.Options)
-                .FirstOrDefaultAsync(t => t.Id == id);
+         //// 3 sep ////
+ [Authorize]
+ [HttpGet("{id:int}")]
+ public async Task<ActionResult<TestDetailDto>> GetTest(int id)
+ {
+     var test = await _db.Tests
+         .Include(t => t.Questions).ThenInclude(q => q.Options)
+         .FirstOrDefaultAsync(t => t.Id == id);
 
-            if (test == null) return NotFound();
+     if (test == null) return NotFound();
 
-            return Ok(new TestDetailDto
-            {
-                Id = test.Id,
-                Title = test.Title,
-                TimeLimitMinutes = test.TimeLimitMinutes, // NEW
-                Questions = test.Questions.Select(q => new QuestionDto
-                {
-                    Id = q.Id,
-                    Text = q.Text,
-                    Type = q.Type == QuestionType.Subjective ? "subjective" : "objective",
-                    ImageUrl = q.ImageUrl,
-                    Options = q.Type == QuestionType.Objective
-                        ? q.Options.Select(o => new OptionDto { Id = o.Id, Text = o.Text }).ToList()
-                        : new List<OptionDto>()
-                }).ToList()
-            });
-        }
+     // NEW: only admin or assigned user can view
+     if (!User.IsInRole("admin")) // NEW
+     {
+         var email = CurrentEmail(); // NEW
+         var allowed = await _db.TestAssignments.AnyAsync(a => a.TestId == id && a.UserEmail == email); // NEW
+         if (!allowed) return Forbid(); // NEW
+     }
+
+     return Ok(new TestDetailDto
+     {
+         Id = test.Id,
+         Title = test.Title,
+         TimeLimitMinutes = test.TimeLimitMinutes,
+         Questions = test.Questions.Select(q => new QuestionDto
+         {
+             Id = q.Id,
+             Text = q.Text,
+             Type = q.Type == QuestionType.Subjective ? "subjective" : "objective",
+             ImageUrl = q.ImageUrl,
+             Options = q.Type == QuestionType.Objective
+                 ? q.Options.Select(o => new OptionDto { Id = o.Id, Text = o.Text }).ToList()
+                 : new List<OptionDto>()
+         }).ToList()
+     });
+ }
 
         [Authorize(Roles = "admin")]
         [HttpDelete("{id:int}")]
@@ -717,87 +750,165 @@ namespace quizTool.Controllers
         }
 
         [Authorize]
-        [HttpPost("submit")]
-        public async Task<ActionResult<AttemptResultDto>> Submit([FromBody] SubmitAttemptDto dto)
+ [HttpPost("submit")]
+ public async Task<ActionResult<AttemptResultDto>> Submit([FromBody] SubmitAttemptDto dto)
+ {
+     var test = await _db.Tests
+         .Include(t => t.Questions)
+         .ThenInclude(q => q.Options)
+         .FirstOrDefaultAsync(t => t.Id == dto.TestId);
+
+     if (test == null) return NotFound("Test not found.");
+
+     // only admin or assigned user may submit
+     if (!User.IsInRole("admin"))
+     {
+         var currentEmail = CurrentEmail(); // FIX: renamed from "email"
+         var allowed = await _db.TestAssignments
+             .AnyAsync(a => a.TestId == dto.TestId && a.UserEmail == currentEmail);
+         if (!allowed) return Forbid();
+     }
+
+     int totalQuestions = test.Questions.Count;
+     int score = 0;
+
+     var submissionEmail = string.IsNullOrWhiteSpace(dto.UserEmail)   // FIX: renamed from "email"
+         ? "anonymous@local"
+         : dto.UserEmail.Trim().ToLower();
+
+     var existing = await _db.TestAttempts
+         .FirstOrDefaultAsync(a => a.TestId == dto.TestId && a.UserEmail.ToLower() == submissionEmail);
+
+     if (existing != null)
+     {
+         return Conflict(new { message = "You have already submitted this test.", attemptId = existing.Id });
+     }
+
+     var attempt = new TestAttempt
+     {
+         TestId = test.Id,
+         UserEmail = submissionEmail // FIX: use the normalized value
+     };
+
+     var correctByQuestion = test.Questions
+         .Where(q => q.Type == QuestionType.Objective)
+         .ToDictionary(
+             q => q.Id,
+             q => q.Options.FirstOrDefault(o => o.IsCorrect)?.Id
+         );
+
+     foreach (var ans in dto.Answers)
+     {
+         var q = test.Questions.FirstOrDefault(x => x.Id == ans.QuestionId);
+         if (q == null) continue;
+
+         if (q.Type == QuestionType.Objective)
+         {
+             bool isCorrect = ans.SelectedOptionId.HasValue &&
+                              correctByQuestion.TryGetValue(ans.QuestionId, out var corrId) &&
+                              corrId == ans.SelectedOptionId.Value;
+
+             if (isCorrect) score++;
+
+             attempt.Answers.Add(new TestAttemptAnswer
+             {
+                 QuestionId = ans.QuestionId,
+                 SelectedOptionId = ans.SelectedOptionId,
+                 IsCorrect = isCorrect,
+                 SubjectiveText = null
+             });
+         }
+         else
+         {
+             attempt.Answers.Add(new TestAttemptAnswer
+             {
+                 QuestionId = ans.QuestionId,
+                 SelectedOptionId = null,
+                 IsCorrect = false,
+                 SubjectiveText = ans.SubjectiveText
+             });
+         }
+     }
+
+     attempt.Score = score;
+     attempt.Total = totalQuestions;
+
+     _db.TestAttempts.Add(attempt);
+     await _db.SaveChangesAsync();
+
+     return Ok(new AttemptResultDto
+     {
+         AttemptId = attempt.Id,
+         Score = score,
+         Total = totalQuestions
+     });
+ }
+
+
+
+[Authorize(Roles = "admin")]
+[HttpPost("{testId:int}/assign")]
+public async Task<IActionResult> AssignUsers(int testId, [FromBody] AssignTestDto body) // NEW
+{
+    var testExists = await _db.Tests.AnyAsync(t => t.Id == testId);
+    if (!testExists) return NotFound(new { message = "Test not found." });
+
+    var emails = (body?.Emails ?? new()).Select(e => (e ?? "").Trim().ToLower())
+        .Where(e => !string.IsNullOrWhiteSpace(e))
+        .Distinct()
+        .ToList();
+
+    if (emails.Count == 0) return BadRequest(new { message = "No emails provided." });
+
+    var existing = await _db.TestAssignments
+        .Where(a => a.TestId == testId && emails.Contains(a.UserEmail))
+        .Select(a => a.UserEmail)
+        .ToListAsync();
+
+    var toAdd = emails.Except(existing).ToList();
+    foreach (var em in toAdd)
+        _db.TestAssignments.Add(new TestAssignment { TestId = testId, UserEmail = em });
+
+    await _db.SaveChangesAsync();
+
+    return Ok(new { testId, assignedAdded = toAdd.Count, alreadyAssigned = existing.Count });
+}
+
+[Authorize(Roles = "admin")]
+[HttpGet("{testId:int}/assignees")]
+public async Task<ActionResult<IEnumerable<TestAssigneeDto>>> GetAssignees(int testId) // NEW
+{
+    var q =
+        from a in _db.TestAssignments
+        where a.TestId == testId
+        join u in _db.Users on a.UserEmail equals u.email into gj
+        from u in gj.DefaultIfEmpty()
+        orderby a.AssignedAt descending
+        select new TestAssigneeDto
         {
-            var test = await _db.Tests
-                .Include(t => t.Questions)
-                .ThenInclude(q => q.Options)
-                .FirstOrDefaultAsync(t => t.Id == dto.TestId);
+            Email = a.UserEmail,
+            UserId = u != null ? u.userid : (int?)null,
+            Name = u != null ? u.name : null,
+            AssignedAt = a.AssignedAt
+        };
 
-            if (test == null) return NotFound("Test not found.");
+    var list = await q.ToListAsync();
+    return Ok(list);
+}
 
-            int totalQuestions = test.Questions.Count;
-            int score = 0;
+// (Optional) Admin: unassign a single email
+[Authorize(Roles = "admin")]
+[HttpDelete("{testId:int}/assignees/{email}")]
+public async Task<IActionResult> UnassignUser(int testId, string email) // NEW
+{
+    email = (email ?? "").Trim().ToLower();
+    var rec = await _db.TestAssignments.FirstOrDefaultAsync(a => a.TestId == testId && a.UserEmail == email);
+    if (rec == null) return NotFound();
+    _db.TestAssignments.Remove(rec);
+    await _db.SaveChangesAsync();
+    return NoContent();
+}
 
-            var email = string.IsNullOrWhiteSpace(dto.UserEmail) ? "anonymous@local" : dto.UserEmail.Trim();
-            var existing = await _db.TestAttempts
-                .FirstOrDefaultAsync(a => a.TestId == dto.TestId && a.UserEmail.ToLower() == email.ToLower());
-
-            if (existing != null)
-            {
-                return Conflict(new { message = "You have already submitted this test.", attemptId = existing.Id });
-            }
-
-            var attempt = new TestAttempt
-            {
-                TestId = test.Id,
-                UserEmail = string.IsNullOrWhiteSpace(dto.UserEmail) ? "anonymous@local" : dto.UserEmail
-            };
-
-            var correctByQuestion = test.Questions
-                .Where(q => q.Type == QuestionType.Objective)
-                .ToDictionary(
-                    q => q.Id,
-                    q => q.Options.FirstOrDefault(o => o.IsCorrect)?.Id
-                );
-
-            foreach (var ans in dto.Answers)
-            {
-                var q = test.Questions.FirstOrDefault(x => x.Id == ans.QuestionId);
-                if (q == null) continue;
-
-                if (q.Type == QuestionType.Objective)
-                {
-                    bool isCorrect = ans.SelectedOptionId.HasValue &&
-                                     correctByQuestion.TryGetValue(ans.QuestionId, out var corrId) &&
-                                     corrId == ans.SelectedOptionId.Value;
-
-                    if (isCorrect) score++;
-
-                    attempt.Answers.Add(new TestAttemptAnswer
-                    {
-                        QuestionId = ans.QuestionId,
-                        SelectedOptionId = ans.SelectedOptionId,
-                        IsCorrect = isCorrect,
-                        SubjectiveText = null
-                    });
-                }
-                else
-                {
-                    attempt.Answers.Add(new TestAttemptAnswer
-                    {
-                        QuestionId = ans.QuestionId,
-                        SelectedOptionId = null,
-                        IsCorrect = false,         
-                        SubjectiveText = ans.SubjectiveText
-                    });
-                }
-            }
-
-            attempt.Score = score;
-            attempt.Total = totalQuestions;
-
-            _db.TestAttempts.Add(attempt);
-            await _db.SaveChangesAsync();
-
-            return Ok(new AttemptResultDto
-            {
-                AttemptId = attempt.Id,
-                Score = score,
-                Total = totalQuestions
-            });
-        }
 
         [Authorize(Roles = "admin")]
         [HttpGet("{id:int}/admin")]

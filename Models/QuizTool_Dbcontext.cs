@@ -16,6 +16,9 @@ namespace quizTool.Models
 
         public DbSet<OtpCode> OtpCodes { get; set; }
 
+        // NEW
+        public DbSet<TestAssignment> TestAssignments { get; set; } // NEW
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -24,6 +27,11 @@ namespace quizTool.Models
             modelBuilder.Entity<UserDataModel>()
             .Property(u => u.role)
             .HasDefaultValue("basic");
+
+               // NEW: avoid duplicate (TestId, Email)
+            modelBuilder.Entity<TestAssignment>() // NEW
+                .HasIndex(a => new { a.TestId, a.UserEmail })
+                .IsUnique(); // NEW
 
             modelBuilder.Entity<Question>()
             .HasOne(q => q.Test)
