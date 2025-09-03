@@ -10,6 +10,7 @@ using quizTool.Models;
 using System.Data;
 using System.Text;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 // CHANGED: add TimeLimitMinutes on form
 public class UploadTestForm
@@ -46,7 +47,7 @@ namespace quizTool.Controllers
         }
 
          // NEW: helper inside TestsController class
-         private string CurrentEmail()
+     private string CurrentEmail()
      {
          // Try Identity.Name first (depends on NameClaimType mapping)
          string? v = User?.Identity?.Name;
